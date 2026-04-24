@@ -1,4 +1,5 @@
 using FITSFiles
+using DiskArrays
 using Test
 
 showfields(card) = Tuple(push!([getfield(card, k) for k in fieldnames(Card)[1:3]], repr(card)))

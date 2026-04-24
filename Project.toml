@@ -6,6 +6,7 @@ version = "0.3.2"
 
 [deps]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
+DiskArrays = "3c3547ce-8d99-4f5e-a174-61eb10b00ae3"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 UnitfulAngles = "6fb2a4bd-7999-5318-a3b2-8ad61056cd98"
@@ -14,6 +15,7 @@ UnitfulAtomic = "a7773ee8-282e-5fa2-be4e-bd808c38a91a"
 
 [compat]
 CodecZlib = "0.7"
+DiskArrays = "0.4.19"
 Printf = "1.8"
 Unitful = "1.22"
 UnitfulAngles = "0.7"

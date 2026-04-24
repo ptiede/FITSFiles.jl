@@ -918,6 +918,16 @@
 
     @test (length(hdu.data[1]) == 5 && length(hdu.data) == 3 &&
         all([hdu.data[j][:par4] for j=1:3] .== [1.0, 2.0, 3.0]))
+    @test getfield(hdu, :data) isa FITSFiles.LazyStructuredData
+    @test hdu.data[:par4] isa DiskArrays.AbstractDiskArray
+    @test DiskArrays.isdisk(hdu.data[:par4])
+    @test propertynames(hdu.data) == (:par1, :par2, :par3, :par4, :par5)
+    @test :fields ∈ propertynames(hdu.data, true)
+    @test hasproperty(hdu.data, :par4)
+    @test hdu.data.par4[2] == 2.0
+    @test hdu.data[:par4][2] == 2.0
+    @test hdu.data[:par2][1] == BitVector([1, 0, 0])
+    @test hdu.data[2][:par5] == "2.0"
 
     rm(temppath)
 
