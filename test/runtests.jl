@@ -1,4 +1,5 @@
 using FITSFiles
+using DiskArrays
 using Test
 using Unitful, UnitfulAngles, UnitfulAstro
 
