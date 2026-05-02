@@ -88,12 +88,12 @@ function Base.write(io::IO, ::Type{Random}, data::NamedTuple, format::DataFormat
         for j=1:N
             for field in fields[1:format.param]
                 value = data[Symbol(field.name)]
-                write(io, hton(ndims(value) > 1 ? value[j, field.index] :
-                    value[j]))
+                raw = ndims(value) > 1 ? value[j, field.index] : value[j]
+                write(io, hton(convert(format.type, (raw - field.zero) / field.scale)))
             end
             field = fields[end]
             value = reshape(data[Symbol(field.name)], (format.group, :))[j,:]
-            write(io, hton.(value))
+            write(io, hton.(convert.(format.type, (value .- field.zero) ./ field.scale)))
         end
         #  Pad last block with zeros
         padblock(io, format)
@@ -222,7 +222,11 @@ function DataFormat(::Type{Random}, data::U, mankeys::Dict{S, V}) where
     #  Determine format from data
     type  = eltype(data[end])
     shape = size(data[end])[2:end]
-    param = length(data)-1
+    #  For NamedTuples, a Matrix field (e.g. DATE with shape [ngroup, 2]) represents
+    #  multiple FITS parameters and must be counted by its second dimension.
+    param = data isa NamedTuple ?
+        sum(ndims(data[i]) >= 2 ? size(data[i], 2) : 1 for i in 1:length(data)-1) :
+        length(data)-1
     group = length(data[1])
     heap  = 0
     leng  = group*(param + prod(shape))
@@ -237,16 +241,35 @@ function FieldFormat(::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
 
     indices = Dict{AbstractString, Integer}()
     fields = Vector{RandomField}(undef, P+1)
-    for j = 1:P
-        name  = typeof(data) <: NamedTuple ? rstrip(String(keys(data)[j])) :
-            rstrip(get(reskeys, "PTYPE$j", "param$j"))
-        index = indices[name] = get!(indices, name, 0) + 1
-        leng  = 1
-        pzero = least_float_type(get(reskeys, "PZERO$j", 0.0f0))
-        scale = least_float_type(get(reskeys, "PSCAL$j", 1.0f0))
-        fields[j] = RandomField(name, index, type, k+1:k+bytes, leng, (leng,),
-            pzero, scale)
-        k += bytes
+    if data isa NamedTuple
+        #  Expand multi-column NamedTuple fields (e.g. DATE Matrix) into individual
+        #  RandomField entries, matching the original per-parameter FITS layout.
+        j = 0
+        for i in 1:length(data)-1
+            v     = data[i]
+            fname = rstrip(String(keys(data)[i]))
+            ncols = ndims(v) >= 2 ? size(v, 2) : 1
+            for col in 1:ncols
+                j    += 1
+                index = indices[fname] = get!(indices, fname, 0) + 1
+                pzero = least_float_type(get(reskeys, "PZERO$j", 0.0f0))
+                scale = least_float_type(get(reskeys, "PSCAL$j", 1.0f0))
+                fields[j] = RandomField(fname, index, type, k+1:k+bytes, 1, (1,),
+                    pzero, scale)
+                k += bytes
+            end
+        end
+    else
+        for j = 1:P
+            name  = rstrip(get(reskeys, "PTYPE$j", "param$j"))
+            index = indices[name] = get!(indices, name, 0) + 1
+            leng  = 1
+            pzero = least_float_type(get(reskeys, "PZERO$j", 0.0f0))
+            scale = least_float_type(get(reskeys, "PSCAL$j", 1.0f0))
+            fields[j] = RandomField(name, index, type, k+1:k+bytes, leng, (leng,),
+                pzero, scale)
+            k += bytes
+        end
     end
     name  = "data"
     index = 1
