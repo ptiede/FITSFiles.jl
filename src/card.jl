@@ -724,13 +724,18 @@ function format_card(::Type{Value}, key::K, value::V, comment::C,
 	V <: Union{AbstractFloat, Quantity{<:AbstractFloat, <:Any, <:Any}},
 	C <: AbstractString, F <: CardFormat}
 
-	#  Fixed format float value ends at index 30
-	#  Replace (lowercase) 'e' with (uppercase) 'D'.
+	#  Fixed format float value ends at index 30.
+	#  Replace (lowercase) 'e' with (uppercase) 'E'. The FITS standard also
+	#  permits the FORTRAN 'D' double-precision exponent, but many readers
+	#  (cfitsio/FITSIO.jl, VLBIFiles, and Julia's own `parse`) do NOT accept
+	#  'D' and silently fall back to reading the card as a String — which then
+	#  crashes numeric consumers (e.g. `CRVAL4 * u"Hz"` in a UVFITS reader).
+	#  'E' is universally accepted, so use it for every float width.
 	value, units = ustrip(value), string(unit(value))
-	value = replace(string(value), "e" => "D")
+	value = replace(string(value), "e" => "E")
 	#  Truncate mantissa, so value contains 20 characters.
 	if format.fixd && length(value) > FIXEDINDEX
-		n = findfirst("D", value)[1]
+		n = findfirst("E", value)[1]
 		value = value[1:(n-2)] * value[n:end]
 	end
 	padlen = max(0, FIXEDINDEX - length(value))
@@ -1028,14 +1033,21 @@ end
 Determine the type of a number as a Float32, Float64, or Integer
 """
 function parse_number(real::AbstractString)
-	if occursin('D', real) || (occursin('E', real) && overflow(real))
-		value = parse(Float64, replace(real, "E" => "e", "D" => "e"))
-	elseif occursin("E", real)
-		value = parse(Float32, replace(real, "E" => "e"))
-	elseif occursin(r"\.0*[1-9]+", real) && length(split(real, ".")[2]) >= 10
-		value = parse(Float64, real)
-	elseif occursin(".", real)
-		value = parse(Float32, real)
+	if occursin('D', real) || occursin('E', real) || occursin('.', real)
+		#  A FITS header keyword carries NO machine type — the card is plain
+		#  text and the standard makes no single/double distinction for a real
+		#  value (cfitsio/astropy always return a double). So do NOT infer the
+		#  width from the 'D' vs 'E' exponent letter: that is a non-portable
+		#  convention (external writers use 'E' for doubles, and 'D' is rejected
+		#  outright by cfitsio/FITSIO/Julia `parse`). Parse at full precision,
+		#  then narrow to Float32 ONLY when the value is exactly representable as
+		#  Float32 — genuinely-single values stay compact and round-trip their
+		#  type, while a value needing double precision (e.g. a reference
+		#  frequency) is preserved as Float64.
+		value = parse(Float64, replace(real, "D" => "e", "E" => "e"))
+		if Float32(value) == value
+			value = Float32(value)
+		end
 	else
 		value = try
 			parse(Int64, real)
