@@ -24,75 +24,48 @@ struct RandomField <: AbstractField
     scale::Union{AbstractFloat, Missing}
 end
 
-function Base.read(
-        io::IO, ::Type{Random}, format::DataFormat,
-        fields::Vector{RandomField}; record::Bool = false, kwds...
-    )
+function Base.read(io::IO, ::Type{Random}, format::DataFormat,
+    fields::Vector{RandomField}; record::Bool = false, kwds...)
 
-    begpos = position(io)
     M, N = sizeof(format.type), format.leng
     #  Read data array
     names = [field.name for field in fields]
-    ndxs = [
-        name => findall(x -> x == name, names)
-            for name in unique(names)
-    ]
+    ndxs = [name => findall(x -> x == name, names)
+        for name in unique(names)]
     if record
         #  Return data as a vector of records
         #  Concatenate (horizontally) fields having the same name.
         data = []
-        for j in 1:format.group
+        for j=1:format.group
             flds = [read(io, field; kwds...) for field in fields]
-            push!(
-                data, (;
-                    [
-                        Symbol(name) => length(ndx) > 1 ?
-                            hcat(flds[ndx]...) : flds[ndx...]
-                            for (name, ndx) in ndxs
-                    ]...,
-                )
-            )
+            push!(data, (; [Symbol(name) => length(ndx) > 1 ?
+                hcat(flds[ndx]...) : flds[ndx...]
+                for (name, ndx) in ndxs]... ) )
         end
     else
-        #  Return data as NamedTuple of arrays
-        #  Concatenate (horizontally) columns having the same name.
-        cols = [
-            read(io, field, format, begpos; kwds...)
-                for field in fields
-        ]
-        data = (;
-            [
-                Symbol(name) => (
-                        length(ndx) > 1 ? hcat(cols[ndx]...) :
-                        cols[ndx...]
-                    ) for (name, ndx) in ndxs
-            ]...,
-        )
+        #  Return data as NamedTuple of arrays, read in one pass. Columns having the same name
+        #  are the columns of a matrix.
+        values = read!(io, Vector{format.type}(undef, random_values(format)))
+        data = map(collect, mapped_fields(values, format, fields, get(kwds, :scale, true)))
     end
     #   Seek to end of the last data block
     # seek(io, begpos + BLOCKLEN*div(M*N, BLOCKLEN, RoundUp))
 
     ####    Get WCS keywords
-    return data
+    data
 end
 
-function Base.write(
-        io::IO, ::Type{Random}, data::AbstractArray,
-        format::DataFormat, fields::Vector{RandomField}; kwds...
-    )
+function Base.write(io::IO, ::Type{Random}, data::AbstractArray,
+    format::DataFormat, fields::Vector{RandomField}; kwds...)
 
     #  Write data array
     N = format.group
-    return if N > 0
-        for j in 1:N
+    if N > 0
+        for j=1:N
             for field in fields[1:format.param]
                 value = data[j][Symbol(field.name)]
-                write(
-                    io, hton(
-                        ndims(value) > 1 ? value[field.index] :
-                            value
-                    )
-                )
+                write(io, hton(ndims(value) > 1 ? value[field.index] :
+                    value))
             end
             field = fields[end]
             value = reshape(data[j][Symbol(field.name)], :)
@@ -103,33 +76,29 @@ function Base.write(
     end
 end
 
-function Base.write(
-        io::IO, ::Type{Random}, data::NamedTuple, format::DataFormat,
-        fields::Vector{RandomField}; kwds...
-    )
+function Base.write(io::IO, ::Type{Random}, data::NamedTuple, format::DataFormat,
+    fields::Vector{RandomField}; kwds...)
 
     #  Write data array
     N = format.group
-    return if N > 0
-        for j in 1:N
+    if N > 0
+        for j=1:N
             for field in fields[1:format.param]
                 value = data[Symbol(field.name)]
-                raw = ndims(value) > 1 ? value[j, field.index] : value[j]
-                write(io, hton(convert(format.type, (raw - field.zero) / field.scale)))
+                write(io, hton(ndims(value) > 1 ? value[j, field.index] :
+                    value[j]))
             end
             field = fields[end]
-            value = reshape(data[Symbol(field.name)], (format.group, :))[j, :]
-            write(io, hton.(convert.(format.type, (value .- field.zero) ./ field.scale)))
+            value = reshape(data[Symbol(field.name)], (format.group, :))[j,:]
+            write(io, hton.(value))
         end
         #  Pad last block with zeros
         padblock(io, format)
     end
 end
 
-function verify!(
-        ::Type{Random}, cards::Cards, format::DataFormat,
-        mankeys::Dict{S, V}
-    ) where {S <: AbstractString, V <: ValueType}
+function verify!(::Type{Random}, cards::Cards, format::DataFormat,
+    mankeys::Dict{S, V}) where {S<:AbstractString, V<:ValueType}
 
     if !get(mankeys, "SIMPLE", true)
         println("Warning: Primary HDU is nonconformant.")
@@ -139,12 +108,10 @@ function verify!(
         println("Warning: BITPIX set to $(TYPE2BITS[format.type])).")
     end
     if haskey(mankeys, "NAXIS1") && (format.shape != datasize(cards, 2))
-        N = length(format.shape) + 1
+        N = length(format.shape)+1
         setindex!(cards, N, "NAXIS")
         setindex!(cards, 0, "NAXIS1")
-        for j in 2:N
-            setindex!(cards, format.shape[j - 1], "NAXIS$j")
-        end
+        for j=2:N setindex!(cards, format.shape[j-1], "NAXIS$j") end
         println("Warning: NAXIS$(2:N) set to $(format.shape)")
     end
     if !get(mankeys, "GROUPS", true)
@@ -159,11 +126,11 @@ function verify!(
         setindex!(cards, format.group, "GCOUNT")
         println("Warning: GCOUNT set to $(format.group)")
     end
-    return cards
+    cards
 end
 
 function DataFormat(::Type{Random}, data::Missing, mankeys::Dict{S, V}) where
-    {S <: AbstractString, V <: ValueType}
+    {S<:AbstractString, V<:ValueType}
 
     #  Mandatory keys determine HDU type
     type  = BITS2TYPE[get(mankeys, "BITPIX", 32)]
@@ -171,23 +138,21 @@ function DataFormat(::Type{Random}, data::Missing, mankeys::Dict{S, V}) where
     shape = datasize(mankeys, 2)
     param = get(mankeys, "PCOUNT", 0)
     group = get(mankeys, "GCOUNT", 0)
-    heap = param > 0 ? get(mankeys, "THEAP", 0) : 0
-    return DataFormat(type, leng, shape, param, group, heap)
+    heap  = param > 0 ? get(mankeys, "THEAP", 0) : 0
+    DataFormat(type, leng, shape, param, group, heap)
 end
 
-function FieldFormat(
-        ::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
-        data::Missing; record::Bool = false, kwds...
-    ) where
-    {S <: AbstractString, V <: ValueType}
+function FieldFormat(::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
+    data::Missing; record::Bool = false, kwds...) where
+    {S<:AbstractString, V<:ValueType}
 
     type = format.type
     k, P, bytes = 0, format.param, sizeof(type)
 
     indices = Dict{AbstractString, Integer}()
-    fields = Vector{RandomField}(undef, P + 1)
-    for j in 1:P
-        name = rstrip(get(reskeys, "PTYPE$j", "param$j"))
+    fields = Vector{RandomField}(undef, P+1)
+    for j = 1:P
+        name  = rstrip(get(reskeys, "PTYPE$j", "param$j"))
         index = indices[name] = get!(indices, name, 0) + 1
         leng  = 1
     scale = leastfloat(get(reskeys, "PSCAL$j", 1.0f0))
@@ -196,7 +161,7 @@ function FieldFormat(
             pzero, scale)
         k += bytes
     end
-    name = "data"
+    name  = "data"
     index = 1
     leng  = prod(format.shape)
     bzero = leastfloat(get(reskeys,  "BZERO", 0.0f0))
@@ -206,33 +171,29 @@ function FieldFormat(
     fields
 end
 
-function DataFormat(
-        ::Type{Random}, data::AbstractArray,
-        mankeys::Dict{S, V}
-    ) where {S <: AbstractString, V <: ValueType}
+function DataFormat(::Type{Random}, data::AbstractArray,
+    mankeys::Dict{S, V}) where {S<:AbstractString, V<:ValueType}
 
     #  Determine format from data
-    type = typeof(data[1][1])
+    type  = typeof(data[1][1])
     shape = size(data[1][end])
-    param = length(data[1]) - 1
+    param = length(data[1])-1
     group = length(data)
-    heap = 0
-    leng = group * (param + prod(shape))
-    return DataFormat(type, leng, shape, param, group, heap)
+    heap  = 0
+    leng  = group*(param + prod(shape))
+    DataFormat(type, leng, shape, param, group, heap)
 end
 
-function FieldFormat(
-        ::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
-        data::AbstractArray; kwds...
-    ) where {S <: AbstractString, V <: ValueType}
+function FieldFormat(::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
+    data::AbstractArray; kwds...) where {S<:AbstractString, V<:ValueType}
 
     type = format.type
     k, P, bytes = 0, format.param, sizeof(type)
 
     indices = Dict{AbstractString, Integer}()
-    fields = Vector{RandomField}(undef, P + 1)
-    for j in 1:P
-        name = typeof(data[1]) <: NamedTuple ? rstrip(String(keys(data[1])[j])) :
+    fields = Vector{RandomField}(undef, P+1)
+    for j = 1:P
+        name  = typeof(data[1]) <: NamedTuple ? rstrip(String(keys(data[1])[j])) :
             rstrip(get(reskeys, "PTYPE$j", "param$j"))
         index = indices[name] = get!(indices, name, 0) + 1
         leng = 1
@@ -242,7 +203,7 @@ function FieldFormat(
             pzero, scale)
         k += bytes
     end
-    name = typeof(data[1]) <: NamedTuple ? String(keys(data[1])[end]) : "data"
+    name  = typeof(data[1]) <: NamedTuple ? String(keys(data[1])[end]) : "data"
     index = 1
     leng  = prod(format.shape)
     bzero = leastfloat(get(reskeys,  "BZERO", 0.0f0))
@@ -253,65 +214,43 @@ function FieldFormat(
 end
 
 function DataFormat(::Type{Random}, data::U, mankeys::Dict{S, V}) where
-    {U <: Union{Tuple, NamedTuple}, S <: AbstractString, V <: ValueType}
+    {U<:Union{Tuple, NamedTuple}, S<:AbstractString, V<:ValueType}
 
     #  Determine format from data
-    type = eltype(data[end])
+    type  = eltype(data[end])
     shape = size(data[end])[2:end]
-    #  For NamedTuples, a Matrix field (e.g. DATE with shape [ngroup, 2]) represents
-    #  multiple FITS parameters and must be counted by its second dimension.
-    param = data isa NamedTuple ?
-        sum(ndims(data[i]) >= 2 ? size(data[i], 2) : 1 for i in 1:(length(data) - 1)) :
-        length(data) - 1
+    #  Each column of a matrix is a parameter, e.g. DATE as an N × 2 matrix.
+    param = sum(j -> size(data[j], 2), 1:length(data)-1; init = 0)
     group = length(data[1])
-    heap = 0
-    leng = group * (param + prod(shape))
-    return DataFormat(type, leng, shape, param, group, heap)
+    heap  = 0
+    leng  = group*(param + prod(shape))
+    DataFormat(type, leng, shape, param, group, heap)
 end
 
-function FieldFormat(
-        ::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
-        data::U; record::Bool = false
-    ) where {
-        U <: Union{Tuple, NamedTuple},
-        S <: AbstractString, V <: ValueType,
-    }
+function FieldFormat(::Type{Random}, format::DataFormat, reskeys::Dict{S, V},
+    data::U; record::Bool = false) where {U<:Union{Tuple, NamedTuple},
+    S<:AbstractString, V<:ValueType}
 
     type, P, k, bytes = format.type, format.param, 0, sizeof(format.type)
 
     indices = Dict{AbstractString, Integer}()
-    fields = Vector{RandomField}(undef, P + 1)
-    if data isa NamedTuple
-        #  Expand multi-column NamedTuple fields (e.g. DATE Matrix) into individual
-        #  RandomField entries, matching the original per-parameter FITS layout.
-        j = 0
-        for i in 1:(length(data) - 1)
-            v = data[i]
-            fname = rstrip(String(keys(data)[i]))
-            ncols = ndims(v) >= 2 ? size(v, 2) : 1
-            for col in 1:ncols
-                j += 1
-                index = indices[fname] = get!(indices, fname, 0) + 1
-                pzero = leastfloat(get(reskeys, "PZERO$j", 0.0f0))
-                scale = leastfloat(get(reskeys, "PSCAL$j", 1.0f0))
-                fields[j] = RandomField(fname, index, type, k+1:k+bytes, 1, (1,),
-                    pzero, scale)
-                k += bytes
-            end
-        end
-    else
-        for j in 1:P
-            name = rstrip(get(reskeys, "PTYPE$j", "param$j"))
-            index = indices[name] = get!(indices, name, 0) + 1
-            leng  = 1
-            pzero = leastfloat(get(reskeys, "PZERO$j", 0.0f0))
-            scale = leastfloat(get(reskeys, "PSCAL$j", 1.0f0))
-            fields[j] = RandomField(name, index, type, k+1:k+bytes, leng, (leng,),
-                pzero, scale)
-            k += bytes
-        end
+    fields = Vector{RandomField}(undef, P+1)
+    #  Each column of a matrix is a parameter, e.g. DATE as an N × 2 matrix.
+    names = typeof(data) <: NamedTuple ?
+        [rstrip(String(key)) for (key, value) in zip(keys(data)[1:end-1], Tuple(data)[1:end-1])
+            for _ in axes(value, 2)] :
+        [rstrip(get(reskeys, "PTYPE$j", "param$j")) for j = 1:P]
+    for j = 1:P
+        name  = names[j]
+        index = indices[name] = get!(indices, name, 0) + 1
+        leng  = 1
+        pzero = leastfloat(get(reskeys, "PZERO$j", 0.0f0))
+        scale = leastfloat(get(reskeys, "PSCAL$j", 1.0f0))
+        fields[j] = RandomField(name, index, type, k+1:k+bytes, leng, (leng,),
+            pzero, scale)
+        k += bytes
     end
-    name = "data"
+    name  = "data"
     index = 1
     leng  = prod(format.shape)
     bzero = leastfloat(get(reskeys,  "BZERO", 0.0f0))
@@ -321,103 +260,54 @@ function FieldFormat(
     fields
 end
 
-function create_cards!(
-        ::Type{Random}, format::DataFormat,
-        fields::Vector{RandomField}, cards::Cards; kwds...
-    )
+function create_cards!(::Type{Random}, format::DataFormat,
+    fields::Vector{RandomField}, cards::Cards; kwds...)
 
-    N, B = length(format.shape) + 1, TYPE2BITS[format.type]
+    N, B = length(format.shape)+1, TYPE2BITS[format.type]
     P, G = format.param, format.group
     #  Include PTYPE cards if any value is not an empty string
     T = any(.!isempty.([field.name for field in fields[1:P]])) ? P : 0
     #  Create mandatory (required) header cards and remove them from the deck
     #  if necessary
-    required = Vector{Card{<:Any}}(undef, 6 + N + T)
+    required = Vector{Card{<:Any}}(undef, 6+N+T)
     required[1] = popat!(cards, "SIMPLE", Card("SIMPLE", true))
     required[2] = popat!(cards, "BITPIX", Card("BITPIX", B))
-    required[3] = popat!(cards, "NAXIS", Card("NAXIS", N))
+    required[3] = popat!(cards, "NAXIS",  Card("NAXIS", N))
     required[4] = popat!(cards, "NAXIS1", Card("NAXIS1", 0))
-    required[5:(3 + N)] .= [
-        popat!(
-                cards, "NAXIS$j",
-                Card("NAXIS$j", format.shape[j - 1])
-            ) for j in 2:N
-    ]
-    required[4 + N] = popat!(cards, "GROUPS", Card("GROUPS", true))
-    required[5 + N] = popat!(cards, "PCOUNT", Card("PCOUNT", P))
-    required[6 + N] = popat!(cards, "GCOUNT", Card("GCOUNT", G))
-    required[(7 + N):(6 + N + T)] .= [
-        popat!(
-                cards, "PTYPE$j",
-                Card("PTYPE$j", String(fields[j].name))
-            ) for j in 1:T
-    ]
+    required[5:3+N] .= [popat!(cards, "NAXIS$j",
+        Card("NAXIS$j", format.shape[j-1])) for j=2:N]
+    required[4+N] = popat!(cards, "GROUPS", Card("GROUPS", true))
+    required[5+N] = popat!(cards, "PCOUNT", Card("PCOUNT", P))
+    required[6+N] = popat!(cards, "GCOUNT", Card("GCOUNT", G))
+    required[7+N:6+N+T] .= [popat!(cards, "PTYPE$j",
+        Card("PTYPE$j", String(fields[j].name))) for j=1:T]
     #  Append remaining cards in deck, but first remove the END card
     popat!(cards, "END")
     M = length(cards)
-    kards = Vector{Card{<:Any}}(undef, 6 + N + M + T)
-    kards[1:(6 + N + T)] .= required
-    kards[(7 + N + T):(6 + N + M + T)] .= cards
+    kards = Vector{Card{<:Any}}(undef, 6+N+M+T)
+    kards[1:6+N+T] .= required
+    kards[7+N+T:6+N+M+T] .= cards
     #  END card is implied. It will be append on write.
-    return kards
+    kards
 end
 
-function create_data(
-        ::Type{Random}, format::DataFormat,
-        fields::Vector{RandomField}; record::Bool = false, kwds...
-    )
+function create_data(::Type{Random}, format::DataFormat,
+    fields::Vector{RandomField}; record::Bool = false, kwds...)
     #  Create N-dimensional array of zeros of type BITPIX.
     if format.group > 0
         if record
-            data = [
-                (;
-                        [
-                            Symbol(f.name) => length(f.shape) > 1 ?
-                            zeros(f.type, f.shape) : zero(f.type) for f in fields
-                        ]...,
-                    )
-                    for k in 1:format.group
-            ]
+            data = [(; [Symbol(f.name) => length(f.shape) > 1 ?
+                zeros(f.type, f.shape) : zero(f.type) for f in fields]...)
+                for k=1:format.group]
         else
-            data = (;
-                [
-                    Symbol(f.name) => length(f.shape) > 1 ?
-                        zeros(f.type, (format.group, f.shape...)) :
-                        zeros(f.type, format.group) for f in fields
-                ]...,
-            )
+            data = (; [Symbol(f.name) => length(f.shape) > 1 ?
+                zeros(f.type, (format.group, f.shape...)) :
+                zeros(f.type, format.group) for f in fields]...)
         end
     else
         data = missing
     end
-    return data
-end
-
-function Base.read(
-        io::IO, field::RandomField, format::DataFormat,
-        begpos::Integer; scale::Bool = true
-    )
-
-    L = sizeof(format.type) * (format.param + prod(format.shape))
-    M, N = first(field.slice) - 1, format.group
-    type, leng, shape = field.type, field.leng, field.shape
-
-    if leng == 1
-        column = Array{type}(undef, N)
-        for j in 1:N
-            seek(io, begpos + L * (j - 1) + M)
-            column[j] = ntoh(read(io, type))
-        end
-    else
-        column = Array{type}(undef, (N, leng))
-        for j in 1:N
-            seek(io, begpos + L * (j - 1) + M)
-            column[j, :] = ntoh.([read(io, type) for k in 1:leng])
-        end
-        column = reshape(column, (N, shape...))
-    end
-    #  No missing values
-    return _has_active_scaling(field, scale) ? field.zero .+ field.scale .* column : column
+    data
 end
 
 function Base.read(io::IO, field::RandomField; scale::Bool = true)
@@ -426,8 +316,8 @@ function Base.read(io::IO, field::RandomField; scale::Bool = true)
     if leng == 1
         value = ntoh(read(io, type))
     else
-        value = reshape(ntoh.([read(io, type) for j in 1:leng]), shape)
+        value = reshape(ntoh.([read(io, type) for j=1:leng]), shape)
     end
     #  No missing values
-    return _has_active_scaling(field, scale) ? field.zero .+ field.scale .* value : value
+    _has_active_scaling(field, scale) ? field.zero .+ field.scale.*value : value
 end

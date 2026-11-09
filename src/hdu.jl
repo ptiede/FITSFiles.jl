@@ -304,9 +304,6 @@ function Base.read(hdu::HDU)
 		HDU{typeofhdu(hdu)}(getfield(hdu, :cards), read(data)) : hdu
 end
 
-materialize(hdu::HDU) = read(hdu)
-materialize(data::Union{LazyArray, AbstractLazyData}) = read(data)
-
 """
     Base.read(io::IO, ::Type{HDU}; <keywords>)
 
@@ -337,9 +334,9 @@ function Base.read(io::IO, ::Type{HDU}; type = nothing, lazy::Bool = true, stric
 	fields = FieldFormat(type_, format, reskeys, missing)
 	if format.leng > 0
 		pos = position(io)
-		if lazy && io isa IOStream
+		if lazy && io isa IOStream && type_ in (Primary, Image, Conform, Random, Table, Bintable)
 			# create a lazy array for the HDU data field and move to next HDU
-			name, mtime = io.name[7:end-1], stat(io).mtime
+			name, mtime = abspath(io.name[7:end-1]), stat(io).mtime
 			data = lazydata(type_, name, mtime, pos, format, fields, (;kwds...))
 		else
 			data = read(io, type_, format, fields; kwds...)
@@ -368,7 +365,9 @@ function Base.write(io::IO, hdu::HDU{<:AbstractHDU}; kwds...)
 	type   = typeofhdu(hdu)
 	format = DataFormat(type, missing, mankeys)
 	cards  = verify!(type, cards, format, mankeys)
-	fields = FieldFormat(type, format, reskeys, missing)
+	fields = data isa AbstractLazyData ?
+		FieldFormat(type, format, reskeys, missing; record = getfield(data, :record)) :
+		FieldFormat(type, format, reskeys, missing)
 	if data isa Union{LazyArray, AbstractLazyData}
 		format == lazy_format(data) ||
 			error("Cannot raw-copy lazy FITS data after structural header changes.")
